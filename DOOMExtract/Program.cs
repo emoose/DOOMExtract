@@ -29,7 +29,7 @@ namespace DOOMExtract
         }
         static void Main(string[] args)
         {
-            Console.WriteLine("DOOMExtract 1.4 - by infogram @ cs.rin.ru");
+            Console.WriteLine("DOOMExtract 1.5 - by infogram");
             Console.WriteLine();
             if (args.Length <= 0)
             {
@@ -160,7 +160,7 @@ namespace DOOMExtract
 
                 var destFileFolder = Path.GetDirectoryName(destFilePath);
 
-                var data = index.GetEntryData(entry);
+                /*var data = index.GetEntryData(entry);
                 if(data.Length <= 0)
                 {
                     Console.WriteLine("Decompression failed!");
@@ -176,7 +176,14 @@ namespace DOOMExtract
                 if (!Directory.Exists(destFileFolder))
                     Directory.CreateDirectory(destFileFolder);
 
-                File.WriteAllBytes(destFilePath, data);
+                File.WriteAllBytes(destFilePath, data);*/
+
+                if (!Directory.Exists(destFileFolder))
+                    Directory.CreateDirectory(destFileFolder);
+
+                using (FileStream fs = File.OpenWrite(destFilePath))
+                    index.CopyEntryDataToStream(entry, fs);
+
                 Console.WriteLine("----------------------------------------------------");
                 numExtracted++;
             }

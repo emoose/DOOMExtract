@@ -4,6 +4,8 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.IO;
+using ICSharpCode.SharpZipLib.Core;
+using ICSharpCode.SharpZipLib.Zip.Compression.Streams;
 
 namespace DOOMExtract
 {
@@ -110,40 +112,43 @@ namespace DOOMExtract
         public int Header_NumEntries;
 
         public List<DOOMResourceEntry> Entries;
+        public static long StreamCopy(Stream destStream, Stream sourceStream, int bufferSize, long length)
+        {
+            long read = 0;
+            while (read < length)
+            {
+                int toRead = bufferSize;
+                if (toRead > length - read)
+                    toRead = (int)(length - read);
+
+                var buf = new byte[toRead];
+                int buf_read = sourceStream.Read(buf, 0, toRead);
+                destStream.Write(buf, 0, buf_read);
+                read += buf_read;
+            }
+            return read;
+        }
 
         public DOOMResourceIndex(string indexFilePath)
         {
             IndexFilePath = indexFilePath;
         }
 
-        public byte[] GetEntryData(DOOMResourceEntry entry, bool decompress = true)
+        public long CopyEntryDataToStream(DOOMResourceEntry entry, Stream destStream, bool decompress = true)
         {
             if (entry.Size == 0 && entry.CompressedSize == 0)
-                return new byte[] { };
+                return 0;
 
             resourceIO.Stream.Position = entry.Offset;
-            var compressedData = resourceIO.Reader.ReadBytes(entry.CompressedSize);
-            if (entry.Size == entry.CompressedSize || !decompress)
-                return compressedData;
 
-            // have to decompress
-            byte[] data = DecompressData(compressedData);
-            if (data.Length == entry.Size)
-                return data;
-            throw new Exception("Decompression failed");
+            Stream sourceStream = resourceIO.Stream;
+            if (entry.Size != entry.CompressedSize && decompress)
+                sourceStream = new InflaterInputStream(resourceIO.Stream, new ICSharpCode.SharpZipLib.Zip.Compression.Inflater(true), 4096);
+
+            return StreamCopy(destStream, sourceStream, 40960, entry.Size);
         }
 
-        public static byte[] DecompressData(byte[] data)
-        {
-            /* we have to make an array that's length+2 and set some byte to 3 for some reason? */
-            byte[] dec = new byte[data.Length + 2];
-            dec[dec.Length - 2] = 3;
-            data.CopyTo(dec, 0);
-
-            return new MemoryStream(ZLibNet.DeflateCompressor.DeCompress(dec)).ToArray();
-        }
-
-        public static byte[] CompressData(byte[] data, ZLibNet.CompressionLevel level = ZLibNet.CompressionLevel.Level9)
+        /*public static byte[] CompressData(byte[] data, ZLibNet.CompressionLevel level = ZLibNet.CompressionLevel.Level9)
         {
             using (var dest = new MemoryStream())
             {
@@ -153,7 +158,7 @@ namespace DOOMExtract
                     {
                         source.CopyTo(deflateStream);
 
-                        /* DOOM's compressed resources all end with 00 00 FF FF */
+                        // DOOM's compressed resources all end with 00 00 FF FF
                         dest.SetLength(dest.Length + 4);
                         dest.Position = dest.Length - 2;
                         dest.WriteByte(0xFF);
@@ -164,18 +169,18 @@ namespace DOOMExtract
                          * in one test, keeping the bit set made the games graphics screw up and trying to open multiplayer would crash
                          * but unsetting this bit let the game work normally (using a slightly modified decl file also)
                          * another test like this using data that was heavily modded still resulted in a glitched game, even with this bit unset
-                         * results inconclusive :( */
+                         * results inconclusive :( 
                         /*dest.Position = 0;
                         byte b = (byte)ms.ReadByte();
                         b &= byte.MaxValue ^ (1 << 0);
                         ms.Position = 0;
-                        ms.WriteByte((byte)b);*/
+                        ms.WriteByte((byte)b);
 
                         return dest.ToArray();
                     }
                 }
             }
-        }
+        }*/
 
         private void addFilesFromFolder(string folder, string baseFolder, EndianIO destResources, ref List<string> addedFiles)
         {
@@ -252,30 +257,24 @@ namespace DOOMExtract
                     file.Offset = (int)destResources.Stream.Length;
                     continue;
                 }
-                byte[] data = null;
+
                 bool isCompressed = keepCompressed;
 
                 var replacePath = (String.IsNullOrEmpty(replaceFromFolder) ? String.Empty : Path.Combine(replaceFromFolder, file.GetFullName()));
                 if (File.Exists(replacePath + ";" + file.FileType))
                     replacePath += ";" + file.FileType;
 
-                if(!String.IsNullOrEmpty(replaceFromFolder) && File.Exists(replacePath))
+                file.Offset = destResources.Stream.Length;
+                destResources.Stream.Position = file.Offset;
+
+                if (!string.IsNullOrEmpty(replaceFromFolder) && File.Exists(replacePath))
                 {
-                    data = File.ReadAllBytes(replacePath);
-                    isCompressed = false;
                     addedFiles.Add(replacePath);
+                    using (var fs = File.OpenRead(replacePath))
+                        file.CompressedSize = file.Size = (int)StreamCopy(destResources.Stream, fs, 40960, fs.Length);
                 }
                 else
-                    data = GetEntryData(file, !keepCompressed);
-
-                file.Offset = destResources.Stream.Length;
-                if(!isCompressed)
-                    file.Size = data.Length;
-
-                file.CompressedSize = data.Length;
-
-                destResources.Stream.Position = file.Offset;
-                destResources.Writer.Write(data);
+                    file.CompressedSize = file.Size = (int)CopyEntryDataToStream(file, destResources.Stream, !keepCompressed);
             }
 
             // now add any files that weren't replaced
