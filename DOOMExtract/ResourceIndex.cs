@@ -22,7 +22,7 @@ namespace DOOMExtract
         public int Size;
         public int CompressedSize;
         public long Zero;
-        public byte Zero1;
+        public byte PatchFileIndex;
 
         public DOOMResourceEntry(DOOMResourceIndex index)
         {
@@ -71,7 +71,7 @@ namespace DOOMExtract
             else
                 Zero = io.Reader.ReadInt32(); // Zero field is 4 bytes instead of 8 in version 5+
 
-            Zero1 = io.Reader.ReadByte();
+            PatchFileIndex = io.Reader.ReadByte();
         }
 
         public void Write(EndianIO io)
@@ -96,7 +96,7 @@ namespace DOOMExtract
                 io.Writer.Write(Zero);
             else
                 io.Writer.Write((int)Zero); // Zero field is 4 bytes instead of 8 in version 5+
-            io.Writer.Write(Zero1);
+            io.Writer.Write(PatchFileIndex);
         }
     }
     public class DOOMResourceIndex
@@ -142,10 +142,14 @@ namespace DOOMExtract
             resourceIO.Stream.Position = entry.Offset;
 
             Stream sourceStream = resourceIO.Stream;
+            long copyLen = entry.CompressedSize;
             if (entry.Size != entry.CompressedSize && decompress)
+            {
                 sourceStream = new InflaterInputStream(resourceIO.Stream, new ICSharpCode.SharpZipLib.Zip.Compression.Inflater(true), 4096);
+                copyLen = entry.Size;
+            }
 
-            return StreamCopy(destStream, sourceStream, 40960, entry.Size);
+            return StreamCopy(destStream, sourceStream, 40960, copyLen);
         }
 
         /*public static byte[] CompressData(byte[] data, ZLibNet.CompressionLevel level = ZLibNet.CompressionLevel.Level9)
@@ -258,8 +262,6 @@ namespace DOOMExtract
                     continue;
                 }
 
-                bool isCompressed = keepCompressed;
-
                 var replacePath = (String.IsNullOrEmpty(replaceFromFolder) ? String.Empty : Path.Combine(replaceFromFolder, file.GetFullName()));
                 if (File.Exists(replacePath + ";" + file.FileType))
                     replacePath += ";" + file.FileType;
@@ -274,7 +276,7 @@ namespace DOOMExtract
                         file.CompressedSize = file.Size = (int)StreamCopy(destResources.Stream, fs, 40960, fs.Length);
                 }
                 else
-                    file.CompressedSize = file.Size = (int)CopyEntryDataToStream(file, destResources.Stream, !keepCompressed);
+                    file.CompressedSize = (int)CopyEntryDataToStream(file, destResources.Stream, !keepCompressed);
             }
 
             // now add any files that weren't replaced

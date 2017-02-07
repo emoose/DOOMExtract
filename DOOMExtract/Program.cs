@@ -29,7 +29,7 @@ namespace DOOMExtract
         }
         static void Main(string[] args)
         {
-            Console.WriteLine("DOOMExtract 1.5 - by infogram");
+            Console.WriteLine("DOOMExtract 1.5.1 - by infogram");
             Console.WriteLine();
             if (args.Length <= 0)
             {
