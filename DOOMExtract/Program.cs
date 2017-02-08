@@ -13,23 +13,31 @@ namespace DOOMExtract
         {
             Console.WriteLine("Usage:");
             Console.WriteLine("Extraction: DOOMExtract.exe [pathToIndexFile] <destFolder>");
-            Console.WriteLine("If destFolder isn't specified a folder will be created next to the index file.");
-            Console.WriteLine("Files with fileType != \"file\" will have the fileType appended to the filename.");
-            Console.WriteLine("eg. allowoverlays.decl;renderParm for fileType \"renderParm\"");
+            Console.WriteLine("  If destFolder isn't specified a folder will be created next to the index/pindex file.");
+            Console.WriteLine("  Files with fileType != \"file\" will have the fileType appended to the filename.");
+            Console.WriteLine("  eg. allowoverlays.decl;renderParm for fileType \"renderParm\"");
             Console.WriteLine();
             Console.WriteLine("Repacking: DOOMExtract.exe [pathToIndexFile] --repack [repackFolder]");
-            Console.WriteLine("Will repack the resources with the files in the repack folder.");
-            Console.WriteLine("Note that files that don't already exist in the resources will be added.");
-            Console.WriteLine("To set a new files fileType append the fileType to its filename.");
-            Console.WriteLine("eg. allowoverlays.decl;renderParm for fileType \"renderParm\"");
+            Console.WriteLine("  Will repack the resources with the files in the repack folder.");
+            Console.WriteLine("  Files that don't already exist in the resources will be added.");
+            Console.WriteLine("  To set a new files fileType append the fileType to its filename.");
+            Console.WriteLine("  eg. allowoverlays.decl;renderParm for fileType \"renderParm\"");
+            Console.WriteLine("  Note that you should only rebuild the latest patch index file, as patches rely on the data in earlier files!");
+            Console.WriteLine();
+            Console.WriteLine("Patch creation: DOOMExtract.exe [pathToLatestPatchIndex] --createPatch [patchContentsFolder]");
+            Console.WriteLine("  Allows you to create your own patch files.");
+            Console.WriteLine("  Works like repacking above, but the resulting patch files will only contain the files you've added/changed.");
+            Console.WriteLine("  Make sure to point it to the highest-numbered .pindex file!");
+            Console.WriteLine("  Once completed a new .patch/.pindex file pair should be created.");
             Console.WriteLine();
             Console.WriteLine("Deleting files: DOOMExtract.exe [pathToIndexFile] --delete [file1] <file2> <file3> ...");
-            Console.WriteLine("Will delete files from the resources package. Full filepaths should be specified.");
-            Console.WriteLine("If a file isn't found in the package a warning will be given.");
+            Console.WriteLine("  Will delete files from the resources package. Full filepaths should be specified.");
+            Console.WriteLine("  If a file isn't found in the package a warning will be given.");
+            Console.WriteLine("  This should only be used on the latest patch file, as modifying earlier patch files may break later ones.");
         }
         static void Main(string[] args)
         {
-            Console.WriteLine("DOOMExtract 1.5.1 - by infogram");
+            Console.WriteLine("DOOMExtract 1.6 - by infogram");
             Console.WriteLine();
             if (args.Length <= 0)
             {
@@ -43,6 +51,12 @@ namespace DOOMExtract
 
             bool isRepacking = false;
             bool isDeleting = false;
+            bool isCreatingPatch = false;
+            bool quietMode = false;
+
+            foreach (var arg in args)
+                if (arg == "--quiet")
+                    quietMode = true;
 
             if (args.Length >= 2)
             {
@@ -50,9 +64,11 @@ namespace DOOMExtract
                 {
                     isDeleting = true;
                 }
-                else if(args[1] == "--repack") // repacking
+                else if(args[1] == "--repack" || args[1] == "--createPatch") // repacking
                 {
                     isRepacking = true;
+                    isCreatingPatch = args[1] == "--createPatch";
+
                     if (args.Length <= 2) // missing the repack folder arg
                     {
                         PrintUsage();
@@ -62,7 +78,7 @@ namespace DOOMExtract
                     destFolder = Path.GetFullPath(args[2]); // use destFolder as the folder where repack files are
                     if(!Directory.Exists(destFolder))
                     {
-                        Console.WriteLine("Repack folder \"" + destFolder + "\" doesn't exist!");
+                        Console.WriteLine((isCreatingPatch ? "Patch" : "Repack") + $" folder \"{destFolder}\" doesn't exist!");
                         return;
                     }
                 }
@@ -70,7 +86,7 @@ namespace DOOMExtract
                     destFolder = Path.GetFullPath(args[1]);
             }
 
-            Console.WriteLine("Loading " + indexFilePath + "...");
+            Console.WriteLine($"Loading {indexFilePath}...");
             var index = new DOOMResourceIndex(indexFilePath);
             if(!index.Load())
             {
@@ -78,18 +94,72 @@ namespace DOOMExtract
                 return;
             }
 
-            Console.WriteLine("Index loaded, Header_NumEntries = " + index.Header_NumEntries.ToString());
+            Console.WriteLine($"Index loaded ({index.Entries.Count} files)" + (!quietMode ? ", data file contents:" : ""));
+
+            if (!quietMode)
+            {
+                var pfis = new Dictionary<int, int>();
+
+                foreach (var entry in index.Entries)
+                {
+                    if (!pfis.ContainsKey(entry.PatchFileNumber))
+                        pfis.Add(entry.PatchFileNumber, 0);
+                    pfis[entry.PatchFileNumber]++;
+                }
+
+                var pfiKeys = pfis.Keys.ToList();
+                pfiKeys.Sort();
+
+                int total = 0;
+                foreach (var key in pfiKeys)
+                {
+                    var resName = Path.GetFileName(index.ResourceFilePath(key));
+                    Console.WriteLine($"  {resName}: {pfis[key]} files");
+                    total += pfis[key];
+                }
+
+                Console.WriteLine();
+            }
+
+            if (isCreatingPatch)
+            {
+                // clone old index and increment the patch file number
+
+                byte pfi = (byte)(index.PatchFileNumber + 1);
+                var destPath = Path.ChangeExtension(index.ResourceFilePath(pfi), ".pindex");
+                index.Close();
+
+                if (File.Exists(destPath))
+                    File.Delete(destPath); // !!!!
+
+                File.Copy(indexFilePath, destPath);
+                indexFilePath = destPath;
+
+                index = new DOOMResourceIndex(destPath);
+                if(!index.Load())
+                {
+                    Console.WriteLine("Copied patch file failed to load? (this should never happen!)");
+                    return;
+                }
+                index.PatchFileNumber = pfi;
+            }
 
             if(isRepacking)
             {
-                // REPACK MODE!!!
+                // REPACK (and patch creation) MODE!!!
 
-                Console.WriteLine("Repacking/rebuilding resources file from folder " + destFolder + "...");
-                index.Rebuild(index.ResourceFilePath + "_tmp", destFolder, true);
+                var resFile = index.ResourceFilePath(index.PatchFileNumber);
+                
+                Console.WriteLine((isCreatingPatch ? "Creating" : "Repacking") + $" {Path.GetFileName(indexFilePath)} from folder {destFolder}...");
+
+                index.Rebuild(resFile + "_tmp", destFolder, true);
                 index.Close();
-                File.Delete(index.ResourceFilePath);
-                File.Move(index.ResourceFilePath + "_tmp", index.ResourceFilePath);
-                Console.WriteLine("Repack complete!");
+
+                if(File.Exists(resFile))
+                    File.Delete(resFile);
+
+                File.Move(resFile + "_tmp", resFile);
+                Console.WriteLine(isCreatingPatch ? "Patch file created!" : "Repack complete!");
                 return;
             }
 
@@ -118,12 +188,12 @@ namespace DOOMExtract
                     }
 
                     if (delIdx == -1)
-                        Console.WriteLine("Failed to find file " + args[i] + " in package.");
+                        Console.WriteLine($"Failed to find file {args[i]} in package.");
                     else
                     {
                         index.Entries.RemoveAt(delIdx);
                         deleted++;
-                        Console.WriteLine("Deleted " + args[i] + "!");
+                        Console.WriteLine($"Deleted {args[i]}!");
                     }
                 }
 
@@ -131,12 +201,12 @@ namespace DOOMExtract
                 if (deleted > 0)
                 {
                     Console.WriteLine("Repacking/rebuilding resources file...");
-                    index.Rebuild(index.ResourceFilePath + "_tmp", String.Empty, true);
+                    index.Rebuild(index.ResourceFilePath(index.PatchFileNumber) + "_tmp", String.Empty, true);
                     index.Close();
-                    File.Delete(index.ResourceFilePath);
-                    File.Move(index.ResourceFilePath + "_tmp", index.ResourceFilePath);
+                    File.Delete(index.ResourceFilePath(index.PatchFileNumber));
+                    File.Move(index.ResourceFilePath(index.PatchFileNumber) + "_tmp", index.ResourceFilePath(index.PatchFileNumber));
                 }
-                Console.WriteLine("Deleted " + deleted.ToString() + " files from resources.");
+                Console.WriteLine($"Deleted {deleted} files from resources.");
                 return;
             }
 
@@ -145,14 +215,17 @@ namespace DOOMExtract
             if (!Directory.Exists(destFolder))
                 Directory.CreateDirectory(destFolder);
 
+            Console.WriteLine("Extracting contents to:");
+            Console.WriteLine("\t" + destFolder);
+
             int numExtracted = 0;
-            var warned = new List<DOOMResourceEntry>();
             foreach(var entry in index.Entries)
             {
                 if(entry.Size == 0 && entry.CompressedSize == 0) // blank entry?
                     continue;
-
-                Console.WriteLine("Extracting " + entry.GetFullName() + " (type: " + entry.FileType + " size: " + entry.Size.ToString() + " compressed: " + entry.CompressedSize.ToString());
+                
+                Console.WriteLine($"Extracting {entry.GetFullName()}...");
+                Console.WriteLine($"\ttype: {entry.FileType}, size: {entry.Size} ({entry.CompressedSize} bytes compressed), source file: {Path.GetFileName(index.ResourceFilePath(entry.PatchFileNumber))}");
 
                 var destFilePath = Path.Combine(destFolder, entry.GetFullName());
                 if (entry.FileType != "file")
@@ -160,37 +233,18 @@ namespace DOOMExtract
 
                 var destFileFolder = Path.GetDirectoryName(destFilePath);
 
-                /*var data = index.GetEntryData(entry);
-                if(data.Length <= 0)
-                {
-                    Console.WriteLine("Decompression failed!");
-                    continue;
-                }
-
-                if (data.Length != entry.Size)
-                {
-                    Console.WriteLine("WARNING: Decompression resulted in " + data.Length + " bytes, but we expected " + entry.Size + " bytes!");
-                    warned.Add(entry);
-                }
-
-                if (!Directory.Exists(destFileFolder))
-                    Directory.CreateDirectory(destFileFolder);
-
-                File.WriteAllBytes(destFilePath, data);*/
-
                 if (!Directory.Exists(destFileFolder))
                     Directory.CreateDirectory(destFileFolder);
 
                 using (FileStream fs = File.OpenWrite(destFilePath))
                     index.CopyEntryDataToStream(entry, fs);
-
+                
                 Console.WriteLine("----------------------------------------------------");
+
                 numExtracted++;
             }
 
             Console.WriteLine("Extraction complete! Extracted " + numExtracted.ToString() + " files.");
-            if (warned.Count > 0)
-                Console.WriteLine("... with " + warned.Count + " warnings!");
         }
     }
 }

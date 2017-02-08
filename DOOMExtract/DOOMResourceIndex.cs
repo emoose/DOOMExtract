@@ -1,155 +1,90 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using System.IO;
-using ICSharpCode.SharpZipLib.Core;
+using System.Linq;
 using ICSharpCode.SharpZipLib.Zip.Compression.Streams;
 
 namespace DOOMExtract
 {
-    public class DOOMResourceEntry
-    {
-        private DOOMResourceIndex _index;
-
-        public int ID;
-        public string FileType; // type?
-        public string FileName2; // ??
-        public string FileName3; // full path
-
-        public long Offset;
-        public int Size;
-        public int CompressedSize;
-        public long Zero;
-        public byte PatchFileIndex;
-
-        public DOOMResourceEntry(DOOMResourceIndex index)
-        {
-            _index = index;
-        }
-
-        public override string ToString()
-        {
-            return GetFullName();
-        }
-
-        public string GetFullName()
-        {
-            if (!String.IsNullOrEmpty(FileName3))
-                return FileName3.Replace("/", "\\"); // convert to windows path
-
-            if (!String.IsNullOrEmpty(FileName2))
-                return FileName2.Replace("/", "\\"); // convert to windows path
-
-            return FileType.Replace("/", "\\"); // convert to windows path
-
-        }
-        public void Read(EndianIO io)
-        {
-            io.BigEndian = true;
-            ID = io.Reader.ReadInt32();
-
-            io.BigEndian = false;
-            // fname1
-            int size = io.Reader.ReadInt32();
-            FileType = io.Reader.ReadAsciiString(size);
-            // fname2
-            size = io.Reader.ReadInt32();
-            FileName2 = io.Reader.ReadAsciiString(size);
-            // fname3
-            size = io.Reader.ReadInt32();
-            FileName3 = io.Reader.ReadAsciiString(size);
-
-            io.BigEndian = true;
-
-            Offset = io.Reader.ReadInt64();
-            Size = io.Reader.ReadInt32();
-            CompressedSize = io.Reader.ReadInt32();
-            if (_index.Header_Version <= 4)
-                Zero = io.Reader.ReadInt64();
-            else
-                Zero = io.Reader.ReadInt32(); // Zero field is 4 bytes instead of 8 in version 5+
-
-            PatchFileIndex = io.Reader.ReadByte();
-        }
-
-        public void Write(EndianIO io)
-        {
-            io.BigEndian = true;
-            io.Writer.Write(ID);
-
-            io.BigEndian = false;
-            io.Writer.Write(FileType.Length);
-            io.Writer.WriteAsciiString(FileType, FileType.Length);
-            io.Writer.Write(FileName2.Length);
-            io.Writer.WriteAsciiString(FileName2, FileName2.Length);
-            io.Writer.Write(FileName3.Length);
-            io.Writer.WriteAsciiString(FileName3, FileName3.Length);
-
-            io.BigEndian = true;
-
-            io.Writer.Write(Offset);
-            io.Writer.Write(Size);
-            io.Writer.Write(CompressedSize);
-            if (_index.Header_Version <= 4)
-                io.Writer.Write(Zero);
-            else
-                io.Writer.Write((int)Zero); // Zero field is 4 bytes instead of 8 in version 5+
-            io.Writer.Write(PatchFileIndex);
-        }
-    }
     public class DOOMResourceIndex
     {
         EndianIO indexIO;
-        EndianIO resourceIO;
+        Dictionary<string, EndianIO> resourceIOs;
+
+        public byte PatchFileNumber = 0; // highest PatchFileNumber found in the entries of this index
 
         public string IndexFilePath;
-        public string ResourceFilePath;
+        public string BaseIndexFilePath
+        {
+            get
+            {
+                var sepString = "resources_";
+                var indexPath = IndexFilePath;
+                var numSepIdx = indexPath.IndexOf(sepString);
+                if (numSepIdx < 0)
+                    return indexPath; // IndexFilePath is the base index?
+
+                var basePath = indexPath.Substring(0, numSepIdx + sepString.Length - 1);
+                return basePath + ".index";
+            }
+        }
 
         public byte Header_Version;
         public int Header_IndexSize;
         public int Header_NumEntries;
 
         public List<DOOMResourceEntry> Entries;
-        public static long StreamCopy(Stream destStream, Stream sourceStream, int bufferSize, long length)
-        {
-            long read = 0;
-            while (read < length)
-            {
-                int toRead = bufferSize;
-                if (toRead > length - read)
-                    toRead = (int)(length - read);
-
-                var buf = new byte[toRead];
-                int buf_read = sourceStream.Read(buf, 0, toRead);
-                destStream.Write(buf, 0, buf_read);
-                read += buf_read;
-            }
-            return read;
-        }
 
         public DOOMResourceIndex(string indexFilePath)
         {
             IndexFilePath = indexFilePath;
         }
 
-        public long CopyEntryDataToStream(DOOMResourceEntry entry, Stream destStream, bool decompress = true)
+        public string ResourceFilePath(int patchFileNumber)
         {
-            if (entry.Size == 0 && entry.CompressedSize == 0)
-                return 0;
+            var path = Path.Combine(Path.GetDirectoryName(BaseIndexFilePath), Path.GetFileNameWithoutExtension(BaseIndexFilePath));
+            if (patchFileNumber == 0)
+                return path + ".resources";
+            if (patchFileNumber == 1)
+                return path + ".patch";
 
-            resourceIO.Stream.Position = entry.Offset;
+            return $"{path}_{patchFileNumber:D3}.patch";
+        }
 
-            Stream sourceStream = resourceIO.Stream;
-            long copyLen = entry.CompressedSize;
-            if (entry.Size != entry.CompressedSize && decompress)
+        public EndianIO GetResourceIO(int patchFileNumber)
+        {
+            var resPath = ResourceFilePath(patchFileNumber);
+            if (!resourceIOs.ContainsKey(resPath))
             {
-                sourceStream = new InflaterInputStream(resourceIO.Stream, new ICSharpCode.SharpZipLib.Zip.Compression.Inflater(true), 4096);
-                copyLen = entry.Size;
+                if (!File.Exists(resPath))
+                    return null;
+
+                var io = new EndianIO(resPath, FileMode.Open);
+                io.Stream.Position = 0;
+                var magic = io.Reader.ReadUInt32();
+                if ((magic & 0xFFFFFF00) != 0x52455300)
+                {
+                    io.Close();
+                    return null;
+                }
+
+                resourceIOs.Add(resPath, io);
             }
 
-            return StreamCopy(destStream, sourceStream, 40960, copyLen);
+            return resourceIOs[resPath];
+        }
+
+        public long CopyEntryDataToStream(DOOMResourceEntry entry, Stream destStream, bool decompress = true)
+        {
+            var srcStream = entry.GetDataStream(decompress);
+            if (srcStream == null)
+                return 0;
+            
+            long copyLen = entry.CompressedSize;
+            if (entry.IsCompressed && decompress)
+                copyLen = entry.Size;
+
+            return Utility.StreamCopy(destStream, srcStream, 40960, copyLen);
         }
 
         /*public static byte[] CompressData(byte[] data, ZLibNet.CompressionLevel level = ZLibNet.CompressionLevel.Level9)
@@ -198,6 +133,7 @@ namespace DOOMExtract
                 var filePath = Path.GetFullPath(file).Substring(Path.GetFullPath(baseFolder).Length).Replace("\\", "/");
                 var fileEntry = new DOOMResourceEntry(this);
 
+                fileEntry.PatchFileNumber = PatchFileNumber;
                 fileEntry.FileType = "file";
                 if(filePath.Contains(";")) // fileType is specified
                 {
@@ -208,15 +144,21 @@ namespace DOOMExtract
                 fileEntry.FileName2 = filePath;
                 fileEntry.FileName3 = filePath;
 
-                if (destResources.Stream.Length % 0x10 != 0)
+                bool needToPad = destResources.Stream.Length % 0x10 != 0;
+                if (PatchFileNumber > 0 && destResources.Stream.Length == 4)
+                    needToPad = false; // for some reason patch files start at 0x4 instead of 0x10
+
+                if (needToPad)
                 {
                     int extra = 0x10 - ((int)destResources.Stream.Length % 0x10);
                     destResources.Stream.SetLength(destResources.Stream.Length + extra);
                 }
+
+                fileEntry.Offset = destResources.Stream.Length;
+
                 byte[] fileData = File.ReadAllBytes(file);
                 fileEntry.Size = fileEntry.CompressedSize = fileData.Length;
 
-                fileEntry.Offset = destResources.Stream.Length;
                 fileEntry.ID = Entries.Count; // TODO: find out wtf the ID is needed for?
                 destResources.Stream.Position = fileEntry.Offset;
                 destResources.Writer.Write(fileData);
@@ -245,12 +187,31 @@ namespace DOOMExtract
 
             var destResources = new EndianIO(destResourceFile, FileMode.CreateNew);
             byte[] header = { Header_Version, 0x53, 0x45, 0x52, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+            if(PatchFileNumber > 0)
+                header = new byte[]{ Header_Version, 0x53, 0x45, 0x52 }; // patch files start at 0x4 instead
+
             destResources.Writer.Write(header);
 
             var addedFiles = new List<string>();
             foreach (var file in Entries)
             {
-                if (destResources.Stream.Length % 0x10 != 0)
+                var replacePath = (String.IsNullOrEmpty(replaceFromFolder) ? String.Empty : Path.Combine(replaceFromFolder, file.GetFullName()));
+                if (File.Exists(replacePath + ";" + file.FileType))
+                    replacePath += ";" + file.FileType;
+
+                bool isReplacing = !string.IsNullOrEmpty(replaceFromFolder) && File.Exists(replacePath);
+
+                if (file.PatchFileNumber != PatchFileNumber && !isReplacing)
+                    continue; // file is located in a different patch resource and we aren't replacing it, so skip it
+
+                bool needToPad = destResources.Stream.Length % 0x10 != 0;
+                if (PatchFileNumber > 0 && destResources.Stream.Length == 4)
+                    needToPad = false; // for some reason patch files start at 0x4 instead of 0x10
+
+                if (file.IsCompressed && PatchFileNumber > 0 && !isReplacing) // compressed files not padded in patch files?
+                    needToPad = false;
+
+                if (needToPad)
                 {
                     int extra = 0x10 - ((int)destResources.Stream.Length % 0x10);
                     destResources.Stream.SetLength(destResources.Stream.Length + extra);
@@ -262,21 +223,21 @@ namespace DOOMExtract
                     continue;
                 }
 
-                var replacePath = (String.IsNullOrEmpty(replaceFromFolder) ? String.Empty : Path.Combine(replaceFromFolder, file.GetFullName()));
-                if (File.Exists(replacePath + ";" + file.FileType))
-                    replacePath += ";" + file.FileType;
+                var offset = destResources.Stream.Length;
+                destResources.Stream.Position = offset;
 
-                file.Offset = destResources.Stream.Length;
-                destResources.Stream.Position = file.Offset;
-
-                if (!string.IsNullOrEmpty(replaceFromFolder) && File.Exists(replacePath))
+                if (isReplacing)
                 {
+                    file.PatchFileNumber = PatchFileNumber;
+
                     addedFiles.Add(replacePath);
                     using (var fs = File.OpenRead(replacePath))
-                        file.CompressedSize = file.Size = (int)StreamCopy(destResources.Stream, fs, 40960, fs.Length);
+                        file.CompressedSize = file.Size = (int)Utility.StreamCopy(destResources.Stream, fs, 40960, fs.Length);
                 }
                 else
                     file.CompressedSize = (int)CopyEntryDataToStream(file, destResources.Stream, !keepCompressed);
+
+                file.Offset = offset;
             }
 
             // now add any files that weren't replaced
@@ -294,10 +255,13 @@ namespace DOOMExtract
                 indexIO.Close();
                 indexIO = null;
             }
-            if(resourceIO != null)
+            if(resourceIOs != null)
             {
-                resourceIO.Close();
-                resourceIO = null;
+                foreach (var kvp in resourceIOs)
+                    kvp.Value.Close();
+
+                resourceIOs.Clear();
+                resourceIOs = null;
             }
         }
 
@@ -323,33 +287,31 @@ namespace DOOMExtract
 
         public bool Load()
         {
-            if (!File.Exists(IndexFilePath) || Path.GetExtension(IndexFilePath) != ".index")
+            var indexExt = Path.GetExtension(IndexFilePath);
+            if (!File.Exists(IndexFilePath) || (indexExt != ".index" && indexExt != ".pindex"))
                 return false; // not an index file
 
-            ResourceFilePath = Path.Combine(Path.GetDirectoryName(IndexFilePath), Path.GetFileNameWithoutExtension(IndexFilePath)) + ".resources";
-            if (!File.Exists(ResourceFilePath))
-                return false;
+            if (!File.Exists(ResourceFilePath(0)))
+                return false; // base resource data file not found!
+
+            resourceIOs = new Dictionary<string, EndianIO>();
 
             indexIO = new EndianIO(IndexFilePath, FileMode.Open);
-            resourceIO = new EndianIO(ResourceFilePath, FileMode.Open);
 
             indexIO.Stream.Position = 0;
             var magic = indexIO.Reader.ReadInt32();
             if ((magic & 0xFFFFFF00) != 0x52455300)
             {
-                indexIO.Close();
-                resourceIO.Close();
+                Close();
                 return false; // not a RES file.
             }
             Header_Version = (byte)(magic & 0xFF);
             Header_IndexSize = indexIO.Reader.ReadInt32();
 
-            resourceIO.Stream.Position = 0;
-            magic = resourceIO.Reader.ReadInt32();
-            if((magic & 0xFFFFFF00) != 0x52455300)
+            // init the base resource data file
+            if(GetResourceIO(0) == null)
             {
-                indexIO.Close();
-                resourceIO.Close();
+                Close();
                 return false;
             }
 
@@ -363,6 +325,8 @@ namespace DOOMExtract
                 var entry = new DOOMResourceEntry(this);
                 entry.Read(indexIO);
                 Entries.Add(entry);
+                if (entry.PatchFileNumber > PatchFileNumber)
+                    PatchFileNumber = entry.PatchFileNumber; // highest PatchFileNumber must be our patch file index
             }
 
             return true;
