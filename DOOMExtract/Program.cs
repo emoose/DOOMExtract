@@ -1,8 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using System.IO;
 
 namespace DOOMExtract
@@ -37,7 +35,7 @@ namespace DOOMExtract
         }
         static void Main(string[] args)
         {
-            Console.WriteLine("DOOMExtract 1.6 - by infogram");
+            Console.WriteLine("DOOMExtract 1.6.1 by infogram - https://github.com/emoose/DOOMExtract");
             Console.WriteLine();
             if (args.Length <= 0)
             {
@@ -154,8 +152,13 @@ namespace DOOMExtract
 
                 index.Rebuild(resFile + "_tmp", destFolder, true);
                 index.Close();
+                if (!File.Exists(resFile + "_tmp"))
+                {
+                    Console.WriteLine("Failed to create new resource data file!");
+                    return;
+                }
 
-                if(File.Exists(resFile))
+                if (File.Exists(resFile))
                     File.Delete(resFile);
 
                 File.Move(resFile + "_tmp", resFile);

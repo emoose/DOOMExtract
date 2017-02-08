@@ -1,8 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
-using ICSharpCode.SharpZipLib.Zip.Compression.Streams;
 
 namespace DOOMExtract
 {
@@ -150,8 +148,8 @@ namespace DOOMExtract
 
                 if (needToPad)
                 {
-                    int extra = 0x10 - ((int)destResources.Stream.Length % 0x10);
-                    destResources.Stream.SetLength(destResources.Stream.Length + extra);
+                    long numPadding = 0x10 - (destResources.Stream.Length % 0x10);
+                    destResources.Stream.SetLength(destResources.Stream.Length + numPadding);
                 }
 
                 fileEntry.Offset = destResources.Stream.Length;
@@ -208,18 +206,19 @@ namespace DOOMExtract
                 if (PatchFileNumber > 0 && destResources.Stream.Length == 4)
                     needToPad = false; // for some reason patch files start at 0x4 instead of 0x10
 
-                if (file.IsCompressed && PatchFileNumber > 0 && !isReplacing) // compressed files not padded in patch files?
+                if (file.IsCompressed && !isReplacing && PatchFileNumber > 0) // compressed files not padded in patch files?
                     needToPad = false;
 
                 if (needToPad)
                 {
-                    int extra = 0x10 - ((int)destResources.Stream.Length % 0x10);
-                    destResources.Stream.SetLength(destResources.Stream.Length + extra);
+                    long numPadding = 0x10 - (destResources.Stream.Length % 0x10);
+                    destResources.Stream.SetLength(destResources.Stream.Length + numPadding);
                 }
 
                 if (file.Size <= 0 && file.CompressedSize <= 0)
                 {
-                    file.Offset = (int)destResources.Stream.Length;
+                    // patch indexes have offsets for 0-byte files set to 0, but in normal indexes it's the current resource file length
+                    file.Offset = PatchFileNumber > 0 ? 0 : destResources.Stream.Length;
                     continue;
                 }
 
