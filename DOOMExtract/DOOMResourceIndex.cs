@@ -269,6 +269,9 @@ namespace DOOMExtract
                     }
 
                     var file = Entries.Find(s => s.GetFullName() == fileName);
+                    if (file == null)
+                        file = Entries.Find(s => s.GetFullName().Replace("\\", "/") == fileName);
+
                     if (file != null)
                         file.ID = id;
                     else
