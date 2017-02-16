@@ -128,6 +128,9 @@ namespace DOOMExtract
                 if (addedFiles.Contains(Path.GetFullPath(file)))
                     continue;
 
+                if (folder == baseFolder && Path.GetFileName(file).ToLower() == "fileids.txt")
+                    continue; // don't want to add fileIds.txt from base
+
                 var filePath = Path.GetFullPath(file).Substring(Path.GetFullPath(baseFolder).Length).Replace("\\", "/");
                 var fileEntry = new DOOMResourceEntry(this);
 
@@ -242,6 +245,31 @@ namespace DOOMExtract
             // now add any files that weren't replaced
             if(!String.IsNullOrEmpty(replaceFromFolder))
                 addFilesFromFolder(replaceFromFolder, replaceFromFolder, destResources, ref addedFiles);
+
+            // read the fileIds.txt file if it exists, and set the IDs
+            var idFile = Path.Combine(replaceFromFolder, "fileIds.txt");
+            if (File.Exists(idFile))
+            {
+                var lines = File.ReadAllLines(idFile);
+                foreach(var line in lines)
+                {
+                    var sepIdx = line.LastIndexOf('=');
+                    var fileName = line.Substring(0, sepIdx).Trim();
+                    var fileId = line.Substring(sepIdx + 1).Trim();
+                    int id = -1;
+                    if (!int.TryParse(fileId, out id))
+                    {
+                        Console.WriteLine($"Warning: file {fileName} defined in fileIds.txt but has invalid id!");
+                        continue;
+                    }
+
+                    var file = Entries.Find(s => s.GetFullName() == fileName);
+                    if (file != null)
+                        file.ID = id;
+                    else
+                        Console.WriteLine($"Warning: file {fileName} defined in fileIds.txt but doesn't exist?");
+                }
+            }
 
             destResources.Close();
             Save();

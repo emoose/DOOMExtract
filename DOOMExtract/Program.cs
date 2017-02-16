@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.IO;
+using System.Text;
 
 namespace DOOMExtract
 {
@@ -221,14 +222,18 @@ namespace DOOMExtract
             Console.WriteLine("Extracting contents to:");
             Console.WriteLine("\t" + destFolder);
 
+            var fileIds = new List<string>();
             int numExtracted = 0;
+            int numProcessed = 0;
             foreach(var entry in index.Entries)
             {
+                numProcessed++;
                 if(entry.Size == 0 && entry.CompressedSize == 0) // blank entry?
                     continue;
                 
                 Console.WriteLine($"Extracting {entry.GetFullName()}...");
-                Console.WriteLine($"\ttype: {entry.FileType}, size: {entry.Size} ({entry.CompressedSize} bytes compressed), source file: {Path.GetFileName(index.ResourceFilePath(entry.PatchFileNumber))}");
+                Console.WriteLine($"    id: {entry.ID}, type: {entry.FileType}, size: {entry.Size} ({entry.CompressedSize} bytes compressed)");
+                Console.WriteLine($"    source: {Path.GetFileName(index.ResourceFilePath(entry.PatchFileNumber))}");
 
                 var destFilePath = Path.Combine(destFolder, entry.GetFullName());
                 if (entry.FileType != "file")
@@ -242,12 +247,20 @@ namespace DOOMExtract
                 using (FileStream fs = File.OpenWrite(destFilePath))
                     index.CopyEntryDataToStream(entry, fs);
                 
-                Console.WriteLine("----------------------------------------------------");
-
+                Console.WriteLine($"--------------({numProcessed}/{index.Entries.Count})--------------");
+                fileIds.Add(entry.GetFullName() + "=" + entry.ID);
                 numExtracted++;
             }
 
-            Console.WriteLine("Extraction complete! Extracted " + numExtracted.ToString() + " files.");
+            if (fileIds.Count > 0)
+            {
+                var idFile = Path.Combine(destFolder, "fileIds.txt");
+                if (File.Exists(idFile))
+                    File.Delete(idFile);
+                File.WriteAllLines(idFile, fileIds.ToArray());
+            }
+
+            Console.WriteLine($"Extraction complete! Extracted {numExtracted} files.");
         }
     }
 }
