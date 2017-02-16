@@ -105,12 +105,20 @@ namespace DOOMModLoader
 
             // extract mod zips
             var modInfoPath = Path.Combine(extractedPath, "modinfo.txt");
-            foreach(var zipfile in zips)
+            var fileIdsPath = Path.Combine(extractedPath, "fileIds.txt");
+            var fileIds = "";
+            if (File.Exists(fileIdsPath))
+            {
+                fileIds = File.ReadAllText(fileIdsPath);
+                File.Delete(fileIdsPath);
+            }
+
+            foreach (var zipfile in zips)
             {
                 var modInfo = Path.GetFileName(zipfile);
                 Console.WriteLine("Extracting " + modInfo);
                 ExtractZipFile(zipfile, "", extractedPath);
-                if(File.Exists(modInfoPath))
+                if (File.Exists(modInfoPath))
                 {
                     modInfo = File.ReadAllText(modInfoPath);
                     if (String.IsNullOrEmpty(modInfo))
@@ -118,9 +126,21 @@ namespace DOOMModLoader
 
                     File.Delete(modInfoPath); // delete so no conflicts
                 }
+                if (File.Exists(fileIdsPath))
+                {
+                    // todo: make this use a dictionary instead, so we can detect conflicts
+                    var modsFileIds = File.ReadAllText(fileIdsPath);
+                    if (!String.IsNullOrEmpty(fileIds))
+                        fileIds += Environment.NewLine;
+                    fileIds += modsFileIds;
+
+                    File.Delete(fileIdsPath);
+                }
 
                 Console.WriteLine("Extracted " + modInfo);
             }
+            if (!String.IsNullOrEmpty(fileIds))
+                File.WriteAllText(fileIdsPath, fileIds);
 
             // mod patch creation
             var patchFilter = $"{resourcePrefix}gameresources_*.pindex";

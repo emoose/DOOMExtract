@@ -253,7 +253,12 @@ namespace DOOMExtract
                 var lines = File.ReadAllLines(idFile);
                 foreach(var line in lines)
                 {
+                    if (String.IsNullOrEmpty(line.Trim()))
+                        continue;
+
                     var sepIdx = line.LastIndexOf('=');
+                    if (sepIdx < 0)
+                        continue; // todo: warn user?
                     var fileName = line.Substring(0, sepIdx).Trim();
                     var fileId = line.Substring(sepIdx + 1).Trim();
                     int id = -1;
